@@ -1,0 +1,6 @@
+downloads
+mlruns
+mlflow.db
+.env
+predictions.csv
+.vscode
