@@ -1,0 +1,14 @@
+flask
+flask-cors
+requests
+streamlit
+
+pandas
+numpy
+scikit-learn
+matplotlib
+mlflow
+joblib
+
+minio
+python-dotenv
