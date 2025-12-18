@@ -1,6 +1,6 @@
 import os, io
 import pandas as pd
-from datetime import timedelta
+from datetime import timedelta, datetime, date
 import streamlit as st
 from minio import Minio
 from dotenv import load_dotenv
@@ -73,6 +73,31 @@ def detect_target_col(df: pd.DataFrame) -> str:
 st.sidebar.title("⚙️ Options")
 forecast_hours = st.sidebar.select_slider("Horizon de prévision", options=[6,12,24], value=24)
 peak_threshold = st.sidebar.number_input("Seuil d'alerte pic (MW)", value=60000.0, step=500.0, format="%.0f")
+
+# Ajout du filtre de date
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 Filtre de date")
+use_date_filter = st.sidebar.checkbox("Activer le filtre de date", value=False)
+selected_date = None
+selected_time = None
+
+if use_date_filter:
+    # Sélection de la date
+    min_date = date.today()
+    max_date = date.today() + timedelta(days=30)
+    selected_date = st.sidebar.date_input(
+        "Date de prévision",
+        value=date.today(),
+        min_value=min_date,
+        max_value=max_date
+    )
+
+    # Sélection de l'heure de départ
+    selected_time = st.sidebar.time_input(
+        "Heure de départ",
+        value=datetime.now().time()
+    )
+
 rte_key = PREFIX + "rte_eco2mix_national_tr_last30d.csv"
 model_key = MODELS_PREFIX + "rf_baseline.joblib"
 
@@ -126,8 +151,19 @@ except Exception:
 # --------------------- Prévision ---------------------
 if model is not None:
     periods = int(forecast_hours * 60 / 15)  # pas 15 min
-    last_ts = df[time_col].max()
-    future_idx = pd.date_range(last_ts + pd.Timedelta(minutes=15), periods=periods, freq="15T")
+
+    # Déterminer le point de départ des prévisions
+    if use_date_filter and selected_date is not None and selected_time is not None:
+        # Combiner date et heure sélectionnées
+        start_ts = pd.Timestamp.combine(selected_date, selected_time)
+        st.info(f"🔍 Prévisions à partir de : {start_ts.strftime('%Y-%m-%d %H:%M')}")
+    else:
+        # Par défaut, partir de la dernière date des données
+        last_ts = df[time_col].max()
+        start_ts = last_ts + pd.Timedelta(minutes=15)
+
+    # Générer les timestamps futurs
+    future_idx = pd.date_range(start_ts, periods=periods, freq="15T")
     fut = pd.DataFrame({time_col: future_idx})
     fut['hour'] = fut[time_col].dt.hour
     fut['dow'] = fut[time_col].dt.dayofweek
@@ -137,10 +173,21 @@ if model is not None:
     fut['prediction'] = model.predict(fut[feats])
 
     st.subheader(f"Prévision prochaine(s) {forecast_hours} h (pas 15 min)")
+
+    # Afficher la plage de dates des prévisions
+    start_pred = fut[time_col].min()
+    end_pred = fut[time_col].max()
+    st.caption(f"Période: {start_pred.strftime('%Y-%m-%d %H:%M')} → {end_pred.strftime('%Y-%m-%d %H:%M')}")
+
     st.line_chart(fut.set_index(time_col)['prediction'])
 
     nb_peaks = int((fut['prediction'] > peak_threshold).sum())
     if nb_peaks > 0:
         st.warning(f"⚠️ {nb_peaks} intervalles dépassent le seuil de {peak_threshold:.0f} MW.")
+
+        # Afficher les pics détectés
+        peaks = fut[fut['prediction'] > peak_threshold][[time_col, 'prediction']]
+        with st.expander("Voir les détails des pics"):
+            st.dataframe(peaks.rename(columns={time_col: 'Date/Heure', 'prediction': 'Consommation (MW)'}))
     else:
         st.success("Aucun dépassement de seuil prévu sur l'horizon sélectionné.")
